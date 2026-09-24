@@ -1,11 +1,5 @@
-import { createHash, randomBytes } from "node:crypto";
-import {
-	chmodSync,
-	lstatSync,
-	mkdirSync,
-	realpathSync,
-	statSync,
-} from "node:fs";
+import { randomBytes } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
 import {
 	chmod,
 	lstat,
@@ -15,7 +9,8 @@ import {
 	rename,
 	unlink,
 } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { ensurePrivateDirectory, hash, isContained, syncDirectory } from "./fs.ts";
 import { ContextChannel, deliveredContextRevisions, type ContextMessage, type NoticeObserver } from "./context.ts";
 import { projectBranch, type PiBranchEntry, type ProjectionResult } from "./projection.ts";
 import type { CapabilityReport, HookOutput } from "./types.ts";
@@ -126,32 +121,8 @@ function publicError(error: unknown): string {
 	return "lifecycle operation failed";
 }
 
-function isContained(root: string, candidate: string): boolean {
-	const path = relative(root, candidate);
-	return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
-}
-
-function ensurePrivateDirectory(path: string): void {
-	const absolute = resolve(path);
-	if (!isAbsolute(path) || absolute !== path) throw new Error("unsafe adapter root");
-	const filesystemRoot = absolute.split(sep)[0] === "" ? sep : absolute.split(sep)[0];
-	let current = filesystemRoot;
-	for (const part of absolute.slice(filesystemRoot.length).split(sep).filter(Boolean)) {
-		current = join(current, part);
-		try {
-			const info = lstatSync(current);
-			if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("unsafe adapter root");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			mkdirSync(current, { mode: 0o700 });
-		}
-	}
-	chmodSync(absolute, 0o700);
-	if (realpathSync(absolute) !== absolute) throw new Error("unsafe adapter root");
-}
-
 function recoveryKey(sessionId: string): string {
-	return createHash("sha256").update(`pi-session:${sessionId}`).digest("hex");
+	return hash(`pi-session:${sessionId}`);
 }
 
 function validMarker(value: unknown, root: string): value is RecoveryMarker {
@@ -167,11 +138,6 @@ function validMarker(value: unknown, root: string): value is RecoveryMarker {
 		&& Number.isSafeInteger(marker.projectionRevision) && marker.projectionRevision >= 0
 		&& isAbsolute(marker.projectionPath) && resolve(marker.projectionPath) === marker.projectionPath
 		&& isContained(root, marker.projectionPath);
-}
-
-async function syncDirectory(path: string): Promise<void> {
-	const handle = await open(path, "r");
-	try { await handle.sync(); } finally { await handle.close(); }
 }
 
 export class FileRecoveryStore implements RecoveryStore {
@@ -204,7 +170,7 @@ export class FileRecoveryStore implements RecoveryStore {
 		await chmod(temporary, 0o600);
 		await rename(temporary, path);
 		await chmod(path, 0o600);
-		await syncDirectory(this.#directory);
+		syncDirectory(this.#directory);
 		return path;
 	}
 
@@ -230,9 +196,9 @@ export class FileRecoveryStore implements RecoveryStore {
 			if (info.isSymbolicLink() || !info.isFile() || info.nlink !== 1) throw new Error("unsafe marker");
 			const quarantine = join(this.#directory, `.${basename(path)}.${process.pid}.${randomBytes(8).toString("hex")}.delete`);
 			await rename(path, quarantine);
-			await syncDirectory(this.#directory);
+			syncDirectory(this.#directory);
 			await unlink(quarantine);
-			await syncDirectory(this.#directory);
+			syncDirectory(this.#directory);
 		} catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 	}
 }
@@ -290,8 +256,6 @@ export class SessionCoordinator {
 		return true;
 	}
 
-	markToolResult(): boolean { return this.markDirty(); }
-
 	start(reason: SessionStartReason, deliveredBranch?: readonly Record<string, unknown>[]): Promise<void> {
 		if (!this.#accepting) return Promise.resolve();
 		this.#status.phase = "starting";
@@ -315,11 +279,6 @@ export class SessionCoordinator {
 		}
 		this.#refreshQueueStatus();
 		return completion.promise;
-	}
-
-	/** Fire-and-forget durable boundary used by Pi handlers that must not block the agent loop. */
-	enqueueCheckpoint(force = false, source = "durable-boundary"): void {
-		void this.checkpoint(force, source);
 	}
 
 	async prompt(): Promise<ContextMessage | undefined> {

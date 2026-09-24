@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
 	chmodSync,
 	closeSync,
@@ -7,19 +7,17 @@ import {
 	fstatSync,
 	fsyncSync,
 	lstatSync,
-	mkdirSync,
 	openSync,
 	readFileSync,
 	readdirSync,
 	renameSync,
-	statSync,
-	truncateSync,
 	unlinkSync,
 	writeFileSync,
 	writeSync,
 } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { ensurePrivateDirectory, hash, isContained, syncDirectory, truncateDurable, truncateUtf8 } from "./fs.ts";
+import { basename, dirname, join } from "node:path";
 
 export const DEFAULT_NORMALIZER_VERSION = "1";
 const SCHEMA_VERSION = 2;
@@ -128,7 +126,6 @@ export interface ProjectBranchOptions {
 	root: string;
 	sessionId: string;
 	branch: readonly PiBranchEntry[];
-	previousState?: ProjectionRegistry;
 	normalizerVersion?: string;
 	maxTextBytes?: number;
 	maxToolArgumentBytes?: number;
@@ -161,10 +158,6 @@ type Scan = {
 
 function refused(reason: ProjectionReason): ProjectionResult {
 	return { ok: false, disposition: "refused", reason, appendedRecords: 0, appendedBytes: 0, recoveredRecords: 0, epochCreated: false };
-}
-
-function hash(value: string | Buffer): string {
-	return createHash("sha256").update(value).digest("hex");
 }
 
 function sessionKey(sessionId: string): string {
@@ -208,34 +201,8 @@ function validateBranch(branch: readonly PiBranchEntry[]): boolean {
 	return true;
 }
 
-function isContained(root: string, candidate: string): boolean {
-	const path = relative(root, candidate);
-	return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
-}
-
-function ensureDirectory(path: string): void {
-	const normalized = resolve(path);
-	const filesystemRoot = normalized.split(sep)[0] === "" ? sep : normalized.split(sep)[0];
-	const parts = normalized.slice(filesystemRoot.length).split(sep).filter(Boolean);
-	let current = filesystemRoot;
-	for (const part of parts) {
-		current = join(current, part);
-		try {
-			const info = lstatSync(current);
-			if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("unsafe directory");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			mkdirSync(current, { mode: 0o700 });
-		}
-	}
-	chmodSync(normalized, 0o700);
-}
-
 function prepareRoot(root: string): string {
-	if (!isAbsolute(root) || resolve(root) !== root) throw new Error("unsafe root");
-	ensureDirectory(root);
-	const info = lstatSync(root);
-	if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("unsafe root");
+	ensurePrivateDirectory(root);
 	return root;
 }
 
@@ -245,29 +212,7 @@ function safePath(root: string, ...parts: string[]): string {
 	return path;
 }
 
-function truncateUtf8(value: string, maxBytes: number, marker = "\n[truncated by pi-remember]"): string {
-	let used = 0;
-	let complete = true;
-	for (const character of value.slice(0, maxBytes + 1)) {
-		const bytes = Buffer.byteLength(character, "utf8");
-		if (used + bytes > maxBytes) { complete = false; break; }
-		used += bytes;
-	}
-	if (complete && value.length <= maxBytes) return value;
-	const markerBytes = Buffer.byteLength(marker, "utf8");
-	if (maxBytes <= markerBytes) return marker.slice(0, maxBytes);
-	let result = "";
-	used = 0;
-	for (const character of value.slice(0, maxBytes + 1)) {
-		const bytes = Buffer.byteLength(character, "utf8");
-		if (used + bytes > maxBytes - markerBytes) break;
-		result += character;
-		used += bytes;
-	}
-	return result + marker;
-}
-
-function textFrom(content: unknown, maxBytes = SERIALIZATION_POLICY.maxTextBytes): string {
+function textFrom(content: unknown, maxBytes: number = SERIALIZATION_POLICY.maxTextBytes): string {
 	if (typeof content === "string") return truncateUtf8(content, maxBytes);
 	if (!Array.isArray(content)) return "";
 	let text = "";
@@ -482,11 +427,6 @@ function scanProjection(path: string): Scan {
 	}
 	const torn = malformed || validBytes !== buffer.length;
 	return { records, lines, bytes: buffer.length, validBytes, valid: !torn, torn, recoverableTail, sha256: hash(buffer.subarray(0, validBytes)) };
-}
-
-function syncDirectory(path: string): void {
-	const fd = openSync(path, constants.O_RDONLY);
-	try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
 function atomicJson(path: string, value: unknown): void {
@@ -768,10 +708,7 @@ function recoverOrphan(
 		const path = epochPath(root, key, epoch);
 		let scan = scanProjection(path.absolute);
 		if (scan.recoverableTail && scan.validBytes <= scan.bytes) {
-			truncateSync(path.absolute, scan.validBytes);
-			const fd = openSync(path.absolute, constants.O_RDONLY);
-			try { fsyncSync(fd); } finally { closeSync(fd); }
-			syncDirectory(dirname(path.absolute));
+			truncateDurable(path.absolute, scan.validBytes);
 			scan = scanProjection(path.absolute);
 		}
 		const branchLength = scanBranchLength(scan, branch, policy);
@@ -807,10 +744,7 @@ function repairAndScan(path: string, epoch: ProjectionEpochState): { scan: Scan;
 	if (epoch.durableBytes > scan.validBytes || fileHash(path, epoch.durableBytes) !== epoch.projectionSha256) return { scan, recovered: false, inconsistent: true };
 	let recovered = false;
 	if (scan.recoverableTail) {
-		truncateSync(path, scan.validBytes);
-		const fd = openSync(path, constants.O_RDONLY);
-		try { fsyncSync(fd); } finally { closeSync(fd); }
-		syncDirectory(dirname(path));
+		truncateDurable(path, scan.validBytes);
 		scan = scanProjection(path);
 		recovered = true;
 	}
@@ -837,9 +771,9 @@ export async function projectBranch(options: ProjectBranchOptions): Promise<Proj
 	try { root = prepareRoot(options.root); } catch { return refused("unsafe-root"); }
 	const key = sessionKey(options.sessionId);
 	try {
-		ensureDirectory(safePath(root, "registry"));
-		ensureDirectory(safePath(root, "transcripts", key));
-		ensureDirectory(safePath(root, "locks"));
+		ensurePrivateDirectory(safePath(root, "registry"));
+		ensurePrivateDirectory(safePath(root, "transcripts", key));
+		ensurePrivateDirectory(safePath(root, "locks"));
 	} catch { return refused("unsafe-root"); }
 	const registryPath = safePath(root, "registry", `${key}.json`);
 	const ownershipPath = safePath(root, "registry", "ownership.json");
@@ -851,10 +785,6 @@ export async function projectBranch(options: ProjectBranchOptions): Promise<Proj
 		if (loaded.corrupt) archive(registryPath);
 		let state = loaded.state;
 		let recovered = false;
-		if (!state && options.previousState && stateValid(options.previousState, options.sessionId, key)) {
-			state = structuredClone(options.previousState);
-			recovered = true;
-		}
 		if (!state) {
 			state = recoverOrphan(root, options.sessionId, key, options.branch, policy);
 			if (state) recovered = true;

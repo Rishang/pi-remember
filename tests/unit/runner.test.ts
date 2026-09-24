@@ -26,7 +26,7 @@ function helper(root: string, body: string): string {
 
 function nodeRun(root: string, file: string, options: Parameters<typeof runBounded>[0] = { command: "", cwd: "" }) {
 	const { args = [], ...rest } = options;
-	return runBounded({ cwd: root, ...rest, command: process.execPath, args: [file, ...args] });
+	return runBounded({ ...rest, cwd: rest.cwd || root, command: process.execPath, args: [file, ...args] });
 }
 
 function alive(pid: number): boolean {
@@ -105,8 +105,7 @@ test("does not inherit ambient secrets and redacts named, argv, and stdin secret
 		cwd: root,
 		env: { COOKIE: "cookie-sensitive", NEUTRAL_NAME: "123" },
 		stdin: "stdin-sensitive",
-		sensitiveEnvNames: ["NEUTRAL_NAME"],
-		sensitiveValues: ["yes", "stdin-sensitive"],
+		sensitiveValues: ["yes", "stdin-sensitive", "123"],
 	});
 	assert.equal(result.ok, true);
 	assert.equal(result.stdout, "unset|[REDACTED]|[REDACTED]|[REDACTED]");
@@ -152,7 +151,7 @@ test("timeout terminates the complete POSIX descendant process group", { skip: p
 	const pid = Number(readFileSync(pidFile, "utf8"));
 	try {
 		assert.equal(result.failure, "timeout");
-		assert.equal(result.timedOut, true);
+		assert.equal(result.failure, "timeout");
 		assert.equal(await waitGone(pid), true, `descendant ${pid} survived timeout`);
 	} finally {
 		if (alive(pid)) process.kill(pid, "SIGKILL");
@@ -173,8 +172,6 @@ test("AbortSignal cancellation is distinct and preserves the first termination c
 		maxStdoutBytes: 1_000,
 	});
 	assert.equal(result.failure, "cancelled");
-	assert.equal(result.timedOut, false);
-	assert.equal(result.outputLimited, false);
 
 	const already = new AbortController();
 	already.abort();
@@ -197,8 +194,6 @@ test("the first termination cause wins timeout/output races", async () => {
 		maxStdoutBytes: 8,
 	});
 	assert.equal(result.failure, "timeout");
-	assert.equal(result.timedOut, true);
-	assert.equal(result.outputLimited, false);
 });
 
 test("output cap retains the exact valid UTF-8 prefix and input is bounded", async () => {
@@ -216,7 +211,7 @@ test("output cap retains the exact valid UTF-8 prefix and input is bounded", asy
 		killGraceMs: 20,
 	});
 	assert.equal(output.failure, "output-limit");
-	assert.equal(output.outputLimited, true);
+	assert.equal(output.failure, "output-limit");
 	assert.equal(output.stdout, "€ab");
 	assert.equal(Buffer.byteLength(output.stdout), 5);
 

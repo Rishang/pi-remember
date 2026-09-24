@@ -12,7 +12,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { probeRememberRuntime, SUPPORTED_REMEMBER_COMMIT } from "../../src/plugin.ts";
 import { projectBranch, type PiBranchEntry } from "../../src/projection.ts";
@@ -305,8 +305,8 @@ export async function qualifyInstalledRuntime(options: HarnessOptions = {}): Pro
 		if (readFileIfExists(box.providerMarker)) throw new Error("provider executable invoked");
 		const report: QualificationReport = {
 			schemaVersion: 1,
-			version: capability.version,
-			commit: capability.gitCommitSha,
+			version: capability.version ?? "",
+			commit: capability.gitCommitSha ?? "",
 			providerCalls: 0,
 			activationReady: false,
 			scenarios,
@@ -317,8 +317,8 @@ export async function qualifyInstalledRuntime(options: HarnessOptions = {}): Pro
 	} catch {
 		const report: QualificationReport = {
 			schemaVersion: 1,
-			version: capability.version,
-			commit: capability.gitCommitSha,
+			version: capability.version ?? "",
+			commit: capability.gitCommitSha ?? "",
 			providerCalls: 0,
 			activationReady: false,
 			scenarios: [{ id: "provider-free-harness", status: "failed", detail: "A provider-free qualification scenario failed; details intentionally omitted from the cached report." }, ...BLOCKED],

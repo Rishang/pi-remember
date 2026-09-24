@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { hash, truncateUtf8 } from "./fs.ts";
 import type { HookOutput } from "./types.ts";
 
 const MAX_CONTEXT_BYTES = 64 * 1024;
@@ -11,7 +11,7 @@ export interface ContextMessage {
 	customType: "pi-remember-context";
 	content: string;
 	display: false;
-	details: { revision: string; revisions: string[]; source: "remember" };
+	details: { revisions: string[]; source: "remember" };
 }
 
 export interface ContextNotice {
@@ -23,19 +23,6 @@ export interface ContextNotice {
 export type NoticeObserver = (notice: ContextNotice) => void;
 
 type PendingContext = { revision: string; content: string };
-
-function hash(value: string): string {
-	return createHash("sha256").update(value).digest("hex");
-}
-
-function truncateUtf8(value: string, maximum: number): string {
-	const buffer = Buffer.from(value, "utf8");
-	if (buffer.length <= maximum) return value;
-	const marker = Buffer.from("\n[truncated by pi-remember]", "utf8");
-	let end = Math.max(0, maximum - marker.length);
-	while (end > 0 && (buffer[end] & 0xc0) === 0x80) end -= 1;
-	return Buffer.concat([buffer.subarray(0, end), marker.subarray(0, maximum - end)]).toString("utf8");
-}
 
 function clean(value: string, maximum: number): string {
 	return truncateUtf8(value.replaceAll("\0", ""), maximum).trim();
@@ -90,12 +77,11 @@ export class ContextChannel {
 			customType: "pi-remember-context",
 			content: `${CONTEXT_PREFIX}${body}${CONTEXT_SUFFIX}`,
 			display: false,
-			details: { revision: hash(revisions.join(":")), revisions, source: "remember" },
+			details: { revisions, source: "remember" },
 		};
 	}
 
 	get pendingCount(): number { return this.#pending.size; }
-	get deliveredCount(): number { return this.#delivered.size; }
 }
 
 export function deliveredContextRevisions(branch: readonly Record<string, unknown>[]): string[] {

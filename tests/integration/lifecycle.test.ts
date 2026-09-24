@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import {
-	chmodSync,
 	lstatSync,
 	mkdtempSync,
 	mkdirSync,
@@ -9,7 +8,6 @@ import {
 	rmSync,
 	statSync,
 	symlinkSync,
-	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -54,7 +52,6 @@ function report(disposition: "ready" | "read-only" = "ready"): CapabilityReport 
 		issues: [],
 		paths: {},
 		tools: {},
-		verification: "static",
 	};
 }
 
@@ -183,12 +180,12 @@ test("tool_result is synchronous mark-only and durable checkpoints serialize ups
 	const subject = coordinator(root, runtime, current);
 	await subject.start("startup");
 	const callsBefore = runtime.calls.length;
-	assert.equal(subject.markToolResult(), true);
+	assert.equal(subject.markDirty(), true);
 	assert.equal(runtime.calls.length, callsBefore, "hot path performed no projection or runtime call");
 	const first = subject.checkpoint(false, "turn-end");
 	await running;
 	current.value.branch = [...current.value.branch, user("b", "a")];
-	subject.markToolResult();
+	subject.markDirty();
 	const second = subject.checkpoint(false, "agent-settled");
 	release();
 	await Promise.all([first, second]);
@@ -208,7 +205,7 @@ test("redundant checkpoints coalesce and a later force dominates ordinary pendin
 	const current = snapshot(root);
 	const subject = coordinator(root, runtime, current);
 	const start = subject.start("startup");
-	subject.markToolResult();
+	subject.markDirty();
 	const ordinary = subject.checkpoint(false, "turn-end");
 	const forced = subject.checkpoint(true, "agent-settled");
 	release();
@@ -231,11 +228,11 @@ test("a failed running checkpoint does not resolve a later generation", async ()
 	const current = snapshot(root);
 	const subject = coordinator(root, runtime, current);
 	await subject.start("startup");
-	subject.markToolResult();
+	subject.markDirty();
 	const first = subject.checkpoint();
 	await running;
 	current.value.branch = [...current.value.branch, user("b", "a")];
-	subject.markToolResult();
+	subject.markDirty();
 	let secondResolved = false;
 	const second = subject.checkpoint().then(() => { secondResolved = true; });
 	release();
@@ -291,7 +288,7 @@ test("delivered startup revisions survive coordinator reload and compact context
 		content: delivered.content, display: false, details: delivered.details,
 	}];
 	const reloaded = coordinator(root, runtime, current);
-	await reloaded.start("reload", current.value.branch as Record<string, unknown>[]);
+	await reloaded.start("reload", current.value.branch as unknown as Record<string, unknown>[]);
 	assert.equal(await reloaded.prompt(), undefined);
 	await reloaded.compact();
 	const compact = await reloaded.prompt();
@@ -337,7 +334,7 @@ test("projection and hook failures retain dirty generation and expose redacted s
 	});
 	const subject = coordinator(root, runtime, current);
 	await subject.start("startup");
-	subject.markToolResult();
+	subject.markDirty();
 	await subject.checkpoint();
 	assert.equal(subject.status.dirty, true);
 	assert.equal(subject.status.lastError, "lifecycle operation failed");
@@ -347,7 +344,7 @@ test("projection and hook failures retain dirty generation and expose redacted s
 		adapterRoot: temp(), runtime: new FakeRuntime(), snapshot: () => current.value,
 		project: async () => ({ ok: false, disposition: "refused", reason: "io-error", appendedRecords: 0, appendedBytes: 0, recoveredRecords: 0, epochCreated: false }),
 	});
-	projectionFailure.markToolResult();
+	projectionFailure.markDirty();
 	await projectionFailure.checkpoint();
 	assert.equal(projectionFailure.status.dirty, true);
 	assert.equal(projectionFailure.status.lastOutcome, "error");
@@ -358,7 +355,7 @@ test("read-only capability invokes no hooks and does not falsely clear dirty sta
 	const runtime = new FakeRuntime("read-only");
 	const subject = coordinator(root, runtime, snapshot(root));
 	await subject.start("startup");
-	subject.markToolResult();
+	subject.markDirty();
 	await subject.checkpoint();
 	assert.equal(runtime.calls.length, 0);
 	assert.equal(subject.status.disposition, "read-only");
@@ -377,7 +374,7 @@ test("read-only lifecycle writes no projection and no recovery marker", async ()
 		recoveryStore: store,
 	});
 	await subject.start("startup");
-	subject.markToolResult();
+	subject.markDirty();
 	await subject.checkpoint(true, "manual-save");
 	await subject.prompt();
 	await subject.compact();
@@ -397,13 +394,13 @@ test("shutdown is bounded, rejects new work, cancels obsolete work, and retains 
 	const current = snapshot(root);
 	const subject = coordinator(root, runtime, current, { shutdownTimeoutMs: 30 });
 	await subject.start("startup");
-	subject.markToolResult();
+	subject.markDirty();
 	void subject.checkpoint();
 	const started = performance.now();
 	await subject.shutdown("reload");
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.ok(performance.now() - started < 250);
-	assert.equal(subject.markToolResult(), false);
+	assert.equal(subject.markDirty(), false);
 	assert.equal(subject.status.phase, "stopped");
 	assert.equal(subject.status.lastOutcome, "timeout");
 	assert.equal(subject.status.markerPending, true);
@@ -476,7 +473,7 @@ test("work queued before shutdown cannot run obsolete startup, prompt, or compac
 	});
 	const subject = coordinator(root, runtime, snapshot(root), { shutdownTimeoutMs: 100 });
 	await subject.start("startup");
-	subject.markToolResult();
+	subject.markDirty();
 	void subject.checkpoint();
 	await running;
 	const queuedPrompt = subject.prompt();
@@ -533,7 +530,7 @@ test("successful shutdown clears marker, failed handoff preserves it, and next s
 	const successRuntime = new FakeRuntime();
 	const success = coordinator(successRoot, successRuntime, snapshot(successRoot));
 	await success.start("startup");
-	success.markToolResult();
+	success.markDirty();
 	await success.shutdown("fork");
 	assert.equal(success.status.markerPending, false);
 	assert.throws(() => lstatSync(marker(successRoot)));
@@ -547,7 +544,7 @@ test("successful shutdown clears marker, failed handoff preserves it, and next s
 	});
 	const old = coordinator(recoveryRoot, failing, snapshot(recoveryRoot));
 	await old.start("startup");
-	old.markToolResult();
+	old.markDirty();
 	await old.shutdown("resume");
 	assert.equal(old.status.markerPending, true);
 
@@ -587,9 +584,8 @@ test("thin Pi registration has no factory side effects and maps exact 0.85.1 eve
 		startCalls: [] as string[], marks: 0, checkpoints: [] as string[], compacts: 0, shutdowns: [] as string[],
 		async start(reason: string) { this.startCalls.push(reason); },
 		markDirty() { this.marks += 1; return true; },
-		markToolResult() { this.marks += 1; return true; },
-		enqueueCheckpoint(_force: boolean, source: string) { this.checkpoints.push(source); },
-		async prompt() { return { customType: "pi-remember-context", content: "hidden", display: false, details: { revision: "r", revisions: [], source: "remember" } }; },
+		async checkpoint(_force: boolean, source: string) { this.checkpoints.push(source); },
+		async prompt() { return { customType: "pi-remember-context", content: "hidden", display: false, details: { revisions: [], source: "remember" } }; },
 		async compact() { this.compacts += 1; },
 		async shutdown(reason: string) { this.shutdowns.push(reason); await shutdownGate; },
 	};

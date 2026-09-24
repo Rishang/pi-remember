@@ -131,7 +131,7 @@ test("strict extension appends only new bytes; exact repeat and restart are idem
 	assert.equal(repeated.appendedBytes, 0);
 	assert.deepEqual(readFileSync(repeated.projectionPath!), after);
 
-	const restarted = await projectBranch({ root, sessionId: "session-1", branch, previousState: first.state });
+	const restarted = await projectBranch({ root, sessionId: "session-1", branch });
 	assert.equal(restarted.disposition, "unchanged");
 	assert.deepEqual(readFileSync(restarted.projectionPath!), after);
 });

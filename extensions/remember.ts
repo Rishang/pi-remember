@@ -31,16 +31,17 @@ function snapshot(ctx: ContextLike): HostSnapshot {
 	return {
 		sessionId: ctx.sessionManager.getSessionId(),
 		cwd: ctx.cwd,
-		branch: ctx.sessionManager.getBranch() as HostSnapshot["branch"],
+		branch: ctx.sessionManager.getBranch() as unknown as HostSnapshot["branch"],
 	};
 }
 
-function scriptFor(kind: HookInput["kind"]): string {
-	if (kind === "prompt") return "user-prompt-hook.sh";
-	if (kind === "post-tool") return "post-tool-hook.sh";
-	if (kind === "session-end") return "session-end-hook.sh";
-	return "session-start-hook.sh";
-}
+const HOOKS: Record<HookInput["kind"], [script: string, event: string]> = {
+	"session-start": ["session-start-hook.sh", "SessionStart"],
+	compact: ["session-start-hook.sh", "SessionStart"],
+	prompt: ["user-prompt-hook.sh", "UserPromptSubmit"],
+	"post-tool": ["post-tool-hook.sh", "PostToolUse"],
+	"session-end": ["session-end-hook.sh", "SessionEnd"],
+};
 
 /** Installed process adapter. Activation requires an exact cached provider-free qualification report. */
 export class InstalledRememberRuntime implements RememberRuntime {
@@ -87,9 +88,10 @@ export class InstalledRememberRuntime implements RememberRuntime {
 			if (!saved.ok) throw { failure: saved.failure };
 			return EMPTY;
 		}
-		const script = join(report.root, "scripts", scriptFor(input.kind));
+		const [scriptName, event] = HOOKS[input.kind];
+		const script = join(report.root, "scripts", scriptName);
 		const payload = JSON.stringify({
-			hook_event_name: input.kind === "prompt" ? "UserPromptSubmit" : input.kind === "post-tool" ? "PostToolUse" : input.kind === "session-end" ? "SessionEnd" : "SessionStart",
+			hook_event_name: event,
 			session_id: input.hostSessionId,
 			transcript_path: input.projectionPath,
 			cwd: input.cwd,
@@ -157,27 +159,27 @@ export function registerRememberExtension(pi: PiSurface, dependencies: Registrat
 
 	pi.on("tool_result", (_event, ctx) => {
 		bind(ctx);
-		coordinator?.markToolResult();
+		coordinator?.markDirty();
 	});
 
 	// tool_result is not yet durably represented. turn_end is the first selected durable tool boundary.
 	pi.on("turn_end", (_event, ctx) => {
 		bind(ctx);
-		coordinator?.enqueueCheckpoint(false, "turn-end");
+		void coordinator?.checkpoint(false, "turn-end");
 	});
 	pi.on("agent_end", (_event, ctx) => {
 		bind(ctx);
 		coordinator?.markDirty();
-		coordinator?.enqueueCheckpoint(false, "agent-end");
+		void coordinator?.checkpoint(false, "agent-end");
 	});
 	pi.on("agent_settled", (_event, ctx) => {
 		bind(ctx);
-		coordinator?.enqueueCheckpoint(false, "agent-settled");
+		void coordinator?.checkpoint(false, "agent-settled");
 	});
 	pi.on("session_tree", (_event, ctx) => {
 		bind(ctx);
 		coordinator?.markDirty();
-		coordinator?.enqueueCheckpoint(false, "session-tree");
+		void coordinator?.checkpoint(false, "session-tree");
 	});
 	pi.on("session_compact", (_event, ctx) => {
 		bind(ctx);

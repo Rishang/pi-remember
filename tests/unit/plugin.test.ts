@@ -199,7 +199,6 @@ test("missing bundled config is a non-fatal explicit warning", () => {
 	runtime(plugin, "0.30.0", false);
 	const report = probeRememberRuntime({ env: { PI_REMEMBER_PLUGIN_ROOT: plugin }, toolPaths: tools(root) });
 	assert.equal(report.disposition, "ready");
-	assert.equal(report.verification, "static");
 	assert.ok(report.issues.some(({ code }) => code === "static-probe-only"));
 	assert.ok(report.issues.some(({ code, level }) => code === "bundled-config-missing" && level === "warning"));
 });

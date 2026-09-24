@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import type { HookOutput, RunFailure, RunOptions, RunResult } from "./types.ts";
 
@@ -28,13 +28,12 @@ function publicSpawnError(error: unknown): string {
 }
 
 function sensitiveValues(options: RunOptions): string[] {
-	const explicitNames = new Set(options.sensitiveEnvNames ?? []);
 	const values = new Set(
 		(options.sensitiveValues ?? []).filter((value) => value.length > 0),
 	);
 	for (const [key, value] of Object.entries(options.env ?? {})) {
 		if (typeof value !== "string" || value.length === 0) continue;
-		if (explicitNames.has(key) || (SECRET_NAME.test(key) && value.length >= 4)) values.add(value);
+		if (SECRET_NAME.test(key) && value.length >= 4) values.add(value);
 	}
 	return [...values];
 }
@@ -63,21 +62,8 @@ function captureText(capture: Capture): string {
 	return capture.text + (capture.truncated ? "" : capture.decoder.end());
 }
 
-function killTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals, force: boolean): void {
+function killTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
 	if (!child.pid) return;
-	if (process.platform === "win32") {
-		if (force) {
-			const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-				stdio: "ignore",
-				windowsHide: true,
-				shell: false,
-			});
-			killer.unref();
-		} else {
-			child.kill(signal);
-		}
-		return;
-	}
 	try {
 		// The child starts a detached POSIX process group; negative PID targets it and descendants.
 		process.kill(-child.pid, signal);
@@ -86,60 +72,32 @@ function killTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals, force
 	}
 }
 
+function failed(failure: RunFailure, stderr = ""): RunResult {
+	return { ok: false, failure, code: null, signal: null, stdout: "", stderr };
+}
+
 /** Run one argv-vector process with no shell and no ambient environment inheritance. */
 export function runBounded(options: RunOptions): Promise<RunResult> {
 	const stdin = options.stdin ?? "";
-	if (byteLength(stdin) > (options.maxStdinBytes ?? DEFAULT_INPUT_BYTES)) {
-		return Promise.resolve({
-			ok: false,
-			failure: "input-limit",
-			code: null,
-			signal: null,
-			stdout: "",
-			stderr: "input exceeded configured limit",
-			timedOut: false,
-			outputLimited: false,
-		});
-	}
-	if (options.signal?.aborted) {
-		return Promise.resolve({
-			ok: false,
-			failure: "cancelled",
-			code: null,
-			signal: null,
-			stdout: "",
-			stderr: "",
-			timedOut: false,
-			outputLimited: false,
-		});
-	}
+	if (byteLength(stdin) > (options.maxStdinBytes ?? DEFAULT_INPUT_BYTES)) return Promise.resolve(failed("input-limit", "input exceeded configured limit"));
+	if (options.signal?.aborted) return Promise.resolve(failed("cancelled"));
 
 	return new Promise((resolve) => {
 		const env = Object.fromEntries(
 			Object.entries(options.env ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
 		);
 		const secrets = sensitiveValues(options);
-		let child: ReturnType<typeof spawn>;
+		let child: ChildProcessWithoutNullStreams;
 		try {
 			child = spawn(options.command, [...(options.args ?? [])], {
 				cwd: options.cwd,
 				env,
-				detached: process.platform !== "win32",
+				detached: true,
 				shell: false,
 				stdio: ["pipe", "pipe", "pipe"],
-				windowsHide: true,
 			});
 		} catch (error) {
-			resolve({
-				ok: false,
-				failure: "spawn",
-				code: null,
-				signal: null,
-				stdout: "",
-				stderr: publicSpawnError(error),
-				timedOut: false,
-				outputLimited: false,
-			});
+			resolve(failed("spawn", publicSpawnError(error)));
 			return;
 		}
 
@@ -168,20 +126,18 @@ export function runBounded(options: RunOptions): Promise<RunResult> {
 				stderr: failure === "output-limit"
 					? "output exceeded configured limit"
 					: spawnError ? publicSpawnError(spawnError) : redact(captureText(stderr), secrets),
-				timedOut: failure === "timeout",
-				outputLimited: failure === "output-limit",
 			});
 		};
 		const terminate = (nextCause: TerminationCause) => {
 			if (settled || cause) return;
 			cause = nextCause;
 			clearTimeout(timeoutTimer);
-			killTree(child, "SIGTERM", false);
+			killTree(child, "SIGTERM");
 			killTimer = setTimeout(() => {
 				if (settled) return;
 				// Always force the process group after grace, even if its leader exited.
 				// Otherwise a detached descendant that ignored TERM can outlive the result.
-				killTree(child, "SIGKILL", true);
+				killTree(child, "SIGKILL");
 				child.stdin.destroy();
 				child.stdout.destroy();
 				child.stderr.destroy();

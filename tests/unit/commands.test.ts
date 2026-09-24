@@ -14,7 +14,7 @@ afterEach(() => {
 
 function report(overrides: Partial<CapabilityReport> = {}): CapabilityReport {
 	return {
-		disposition: "ready", root: "/fake/remember", version: "0.30.0", issues: [], paths: {}, tools: {}, verification: "static",
+		disposition: "ready", root: "/fake/remember", version: "0.30.0", issues: [], paths: {}, tools: {},
 		...overrides,
 	};
 }

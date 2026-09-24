@@ -37,8 +37,6 @@ export interface CapabilityReport {
 		skill?: string;
 	};
 	tools: Record<string, string | undefined>;
-	/** This phase verifies static prerequisites only; behavioral parity is a later gate. */
-	verification: "static";
 }
 
 export interface ProbeOptions {
@@ -52,22 +50,6 @@ export interface ProbeOptions {
 
 export type RunFailure = "nonzero" | "spawn" | "timeout" | "cancelled" | "input-limit" | "output-limit";
 
-export type HostEventName = "SessionStart" | "UserPromptSubmit" | "PostToolUse" | "SessionEnd";
-
-export interface HostEvent {
-	event: HostEventName;
-	cwd: string;
-	sessionId: string;
-	hostSessionId: string;
-	transcriptPath: string;
-	source?: string;
-	reason?: string;
-	generation: number;
-	force: boolean;
-}
-
-export type HookDisposition = "ok" | "read-only" | RunFailure;
-
 export interface RunOptions {
 	command: string;
 	args?: readonly string[];
@@ -76,8 +58,6 @@ export interface RunOptions {
 	stdin?: string;
 	/** Values to redact from captured stdout/stderr, including argv/stdin secrets. */
 	sensitiveValues?: readonly string[];
-	/** Environment names whose values must be redacted regardless of naming heuristic. */
-	sensitiveEnvNames?: readonly string[];
 	signal?: AbortSignal;
 	timeoutMs?: number;
 	killGraceMs?: number;
@@ -93,8 +73,6 @@ export interface RunResult {
 	signal: NodeJS.Signals | null;
 	stdout: string;
 	stderr: string;
-	timedOut: boolean;
-	outputLimited: boolean;
 }
 
 export interface HookOutput {

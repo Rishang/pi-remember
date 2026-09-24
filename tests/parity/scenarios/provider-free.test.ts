@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { chmodSync, linkSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import { InstalledRememberRuntime } from "../../../extensions/remember.ts";
 import { SUPPORTED_REMEMBER_COMMIT } from "../../../src/plugin.ts";
 import { QUALIFICATION_FILE, qualificationReady, readQualificationReport, type QualificationReport } from "../../../src/qualification.ts";
 import type { CapabilityReport } from "../../../src/types.ts";
@@ -17,7 +16,7 @@ function temp(): string { const path = mkdtempSync(join(tmpdir(), "pi-remember-p
 function capability(root: string): CapabilityReport {
 	return {
 		disposition: "ready", root: "/runtime", version: "0.30.0", gitCommitSha: SUPPORTED_REMEMBER_COMMIT,
-		issues: [], paths: {}, tools: {}, verification: "static",
+		issues: [], paths: {}, tools: {},
 	};
 }
 
@@ -73,7 +72,7 @@ test("missing exact installed runtime skips provider-free qualification without 
 	writeFileSync(sentinel, "unchanged");
 	const report = await qualifyInstalledRuntime({
 		adapterRoot: join(root, "adapter"),
-		probe: { disposition: "read-only", issues: [], paths: {}, tools: {}, verification: "static" },
+		probe: { disposition: "read-only", issues: [], paths: {}, tools: {} },
 	});
 	assert.equal(report.activationReady, false);
 	assert.equal(report.scenarios[0].status, "skipped");

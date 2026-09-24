@@ -1,6 +1,7 @@
 import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, join, relative, sep } from "node:path";
+import { delimiter, join } from "node:path";
+import { isContained } from "./fs.ts";
 import type {
 	CapabilityIssue,
 	CapabilityReport,
@@ -79,28 +80,19 @@ function recordsFrom(value: unknown): Candidate[] {
 	return records;
 }
 
+function rank({ record }: Candidate, supportedVersion: string, supportedCommit?: string): number {
+	return (record.version === supportedVersion ? 2 : 0) + (supportedCommit !== undefined && record.gitCommitSha === supportedCommit ? 1 : 0);
+}
+
 function compareCandidates(a: Candidate, b: Candidate, supportedVersion: string, supportedCommit?: string): number {
-	const aCommit = supportedCommit !== undefined && a.record.gitCommitSha === supportedCommit;
-	const bCommit = supportedCommit !== undefined && b.record.gitCommitSha === supportedCommit;
-	const aVersion = a.record.version === supportedVersion;
-	const bVersion = b.record.version === supportedVersion;
-	const aRank = aVersion && aCommit ? 3 : aVersion ? 2 : aCommit ? 1 : 0;
-	const bRank = bVersion && bCommit ? 3 : bVersion ? 2 : bCommit ? 1 : 0;
-	return bRank - aRank
+	return rank(b, supportedVersion, supportedCommit) - rank(a, supportedVersion, supportedCommit)
 		|| (b.record.installedAt ?? "").localeCompare(a.record.installedAt ?? "")
 		|| a.key.localeCompare(b.key)
-		|| (a.record.installPath ?? "").localeCompare(b.record.installPath ?? "")
-		|| (a.record.version ?? "").localeCompare(b.record.version ?? "")
-		|| (a.record.gitCommitSha ?? "").localeCompare(b.record.gitCommitSha ?? "");
+		|| (a.record.installPath ?? "").localeCompare(b.record.installPath ?? "");
 }
 
 function chooseRecord(records: Candidate[], supportedVersion: string, supportedCommit?: string): Candidate {
 	return [...records].sort((a, b) => compareCandidates(a, b, supportedVersion, supportedCommit))[0];
-}
-
-function within(root: string, candidate: string): boolean {
-	const path = relative(root, candidate);
-	return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
 }
 
 function regularFile(path: string, mode: number): string | undefined {
@@ -116,7 +108,7 @@ function regularFile(path: string, mode: number): string | undefined {
 
 function runtimeFile(root: string, relativePath: string, executable: boolean): string | undefined {
 	const path = regularFile(join(root, relativePath), constants.R_OK | (executable ? constants.X_OK : 0));
-	return path && within(root, path) ? path : undefined;
+	return path && isContained(root, path) ? path : undefined;
 }
 
 function toolFile(path: string): string | undefined {
@@ -142,7 +134,6 @@ export function probeRememberRuntime(options: ProbeOptions = {}): CapabilityRepo
 		issues,
 		paths: {},
 		tools: {},
-		verification: "static",
 	};
 
 	let requestedRoot: string | undefined;
