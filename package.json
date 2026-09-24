@@ -1,0 +1,28 @@
+{
+  "name": "pi-remember",
+  "version": "0.1.0",
+  "description": "Pi adapter for an independently installed Claude Code Remember plugin (pinned 0.30.0).",
+  "private": true,
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/remember.ts"
+    ]
+  },
+  "files": [
+    "extensions/",
+    "src/",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "check": "node --experimental-strip-types --check extensions/remember.ts && node --experimental-strip-types --check src/types.ts && node --experimental-strip-types --check src/plugin.ts && node --experimental-strip-types --check src/runner.ts && node --experimental-strip-types --check src/projection.ts && node --experimental-strip-types --check src/context.ts && node --experimental-strip-types --check src/runtime.ts && node --experimental-strip-types --check src/qualification.ts && node --experimental-strip-types --check src/commands.ts && node --experimental-strip-types --check tests/helpers/store-manifest.ts && node --experimental-strip-types --check tests/parity/harness.ts && node --experimental-strip-types --check tests/parity/scenarios/provider-free.test.ts && node --experimental-strip-types --check tests/integration/lifecycle.test.ts",
+    "test": "node --experimental-strip-types --test tests/unit/*.test.ts tests/integration/*.test.ts tests/parity/scenarios/*.test.ts",
+    "test:parity": "node --experimental-strip-types tests/parity/harness.ts"
+  }
+}
