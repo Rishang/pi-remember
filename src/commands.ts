@@ -1,24 +1,19 @@
 import { dirname, join } from "node:path";
-import { SUPPORTED_REMEMBER_COMMIT } from "./plugin.ts";
 import { runBounded } from "./runner.ts";
 import type { RuntimeStatus } from "./runtime.ts";
-import { SUPPORTED_REMEMBER_VERSION, type CapabilityReport } from "./types.ts";
+import type { CapabilityReport } from "./types.ts";
 
+/** Claude Code hands hooks its whole environment, so Remember's own settings (REMEMBER_*, summarizer auth) apply here too. */
 export function runtimeEnvironment(root: string, cwd: string, transcriptPath?: string): Record<string, string | undefined> {
 	return {
-		PATH: process.env.PATH,
-		HOME: process.env.HOME,
-		USER: process.env.USER,
-		LANG: process.env.LANG,
-		LC_ALL: process.env.LC_ALL,
-		TZ: process.env.TZ,
+		...process.env,
 		CLAUDE_PLUGIN_ROOT: root,
 		CLAUDE_PROJECT_DIR: cwd,
 		REMEMBER_TRANSCRIPT_PATH: transcriptPath,
 	};
 }
 
-/** The installed skill directory is exposed only when the static probe accepts the pinned runtime. */
+/** The installed skill directory is exposed only when the probe accepts the runtime. */
 export function discoverSkillPaths(report: CapabilityReport): string[] {
 	return report.disposition === "ready" && report.paths.skill ? [dirname(report.paths.skill)] : [];
 }
@@ -51,7 +46,6 @@ function yesNo(value: boolean): string {
 export function formatStatus(report: CapabilityReport, status: Readonly<RuntimeStatus> | undefined, adapterRoot: string): string {
 	const lines = [
 		"pi-remember status",
-		`Supported Remember: ${SUPPORTED_REMEMBER_VERSION} (${short(SUPPORTED_REMEMBER_COMMIT)})`,
 		`Installed Remember: ${report.version ?? "unknown"} (${short(report.gitCommitSha)}) via ${report.source ?? "none"}${report.root ? ` at ${report.root}` : ""}`,
 		`Hook execution: ${report.disposition}`,
 	];

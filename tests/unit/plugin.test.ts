@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
-import { probeRememberRuntime, SUPPORTED_REMEMBER_COMMIT } from "../../src/plugin.ts";
+import { probeRememberRuntime } from "../../src/plugin.ts";
 
 const temporary: string[] = [];
 afterEach(() => {
@@ -16,13 +16,6 @@ const required = [
 	"scripts/post-tool-hook.sh",
 	"scripts/session-end-hook.sh",
 	"scripts/save-session.sh",
-	"scripts/doctor.sh",
-	"scripts/run-consolidation.sh",
-	"pipeline/__init__.py",
-	"pipeline/extract.py",
-	"pipeline/haiku.py",
-	"pipeline/consolidate.py",
-	"skills/remember/SKILL.md",
 ];
 
 function temp(): string {
@@ -36,13 +29,11 @@ function file(path: string, content = ""): void {
 	writeFileSync(path, content);
 }
 
-function runtime(root: string, version = "0.30.0", includeConfig = true): void {
+function runtime(root: string, version = "0.33.0", includeSkill = true): void {
 	file(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "remember", version }));
-	for (const relative of required) {
-		file(join(root, relative), relative.startsWith("scripts/") ? "#!/bin/sh\nexit 0\n" : "");
-		if (relative.startsWith("scripts/")) chmodSync(join(root, relative), 0o700);
-	}
-	if (includeConfig) file(join(root, "config.json"), "{}");
+	// Upstream ships some scripts without the execute bit; hooks run as `bash <script>`.
+	for (const relative of required) file(join(root, relative), "#!/bin/bash\nexit 0\n");
+	if (includeSkill) file(join(root, "skills", "remember", "SKILL.md"), "");
 }
 
 function tools(root: string): Record<string, string> {
@@ -60,28 +51,24 @@ function records(path: string, plugins: Record<string, unknown>): void {
 	file(path, JSON.stringify({ version: 2, plugins }));
 }
 
-test("selects the record matching both supported version and commit with deterministic tie breaks", () => {
+test("selects the most recently updated install of any version, like Claude Code", () => {
 	const root = temp();
-	const supported = join(root, "cache", "remember", "0.30.0-qualified");
-	const wrongCommit = join(root, "cache", "remember", "0.30.0-wrong");
-	const newer = join(root, "cache", "remember", "9.9.9");
-	runtime(supported);
-	runtime(wrongCommit);
-	runtime(newer, "9.9.9");
+	const older = join(root, "cache", "remember", "0.30.0");
+	const newer = join(root, "cache", "remember", "0.33.0");
+	runtime(older, "0.30.0");
+	runtime(newer, "0.33.0");
 	const installed = join(root, "installed_plugins.json");
 	records(installed, {
-		"remember@z-market": [
-			{ installPath: newer, version: "9.9.9", installedAt: "2030-01-01" },
-			{ installPath: wrongCommit, version: "0.30.0", gitCommitSha: "wrong", installedAt: "2031-01-01" },
-		],
-		"remember@a-market": [
-			{ installPath: supported, version: "0.30.0", gitCommitSha: SUPPORTED_REMEMBER_COMMIT, installedAt: "2026-01-01" },
-		],
+		"remember@a-market": [{ installPath: older, version: "0.30.0", installedAt: "2026-01-01", lastUpdated: "2026-02-01" }],
+		"remember@z-market": [{ installPath: newer, version: "0.33.0", gitCommitSha: "a5cc87c", installedAt: "2025-01-01", lastUpdated: "2026-09-23" }],
 	});
 	const report = probeRememberRuntime({ installedPluginsPath: installed, env: {}, toolPaths: tools(root) });
 	assert.equal(report.disposition, "ready");
-	assert.equal(report.root, supported);
+	assert.equal(report.root, newer);
+	assert.equal(report.version, "0.33.0");
+	assert.equal(report.gitCommitSha, "a5cc87c");
 	assert.equal(report.source, "installed-record");
+	assert.deepEqual(report.issues, []);
 });
 
 test("record selection has a stable total order when metadata ties", () => {
@@ -93,8 +80,8 @@ test("record selection has a stable total order when metadata ties", () => {
 	const installed = join(root, "installed-tie.json");
 	records(installed, {
 		"remember@market": [
-			{ installPath: zeta, version: "0.30.0", gitCommitSha: SUPPORTED_REMEMBER_COMMIT },
-			{ installPath: alpha, version: "0.30.0", gitCommitSha: SUPPORTED_REMEMBER_COMMIT },
+			{ installPath: zeta, version: "0.33.0" },
+			{ installPath: alpha, version: "0.33.0" },
 		],
 	});
 	const report = probeRememberRuntime({ installedPluginsPath: installed, env: {}, toolPaths: tools(root) });
@@ -112,25 +99,12 @@ test("override bypasses records but still validates manifest and capabilities", 
 	});
 	assert.equal(report.disposition, "ready");
 	assert.equal(report.source, "override");
-	assert.ok(report.issues.some(({ code }) => code === "commit-unverified"));
-});
-
-test("unsupported version and commit enter read-only mode", () => {
-	const root = temp();
-	const plugin = join(root, "plugin");
-	runtime(plugin, "0.31.0");
-	const installed = join(root, "installed.json");
-	records(installed, { "remember@market": [{ installPath: plugin, version: "0.31.0", gitCommitSha: "other" }] });
-	const report = probeRememberRuntime({ installedPluginsPath: installed, env: {}, toolPaths: tools(root) });
-	assert.equal(report.disposition, "read-only");
-	assert.ok(report.issues.some(({ code }) => code === "unsupported-version"));
-	assert.ok(report.issues.some(({ code }) => code === "unsupported-commit"));
 });
 
 test("missing runtime files and tools are reported without throwing", () => {
 	const root = temp();
 	const plugin = join(root, "plugin");
-	file(join(plugin, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "remember", version: "0.30.0" }));
+	file(join(plugin, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "remember", version: "0.33.0" }));
 	const report = probeRememberRuntime({
 		env: { PI_REMEMBER_PLUGIN_ROOT: plugin },
 		toolPaths: { bash: "", python3: "", jq: "" },
@@ -157,7 +131,7 @@ test("malformed manifest and malformed installation records are safe read-only r
 			null,
 			"bad",
 			4,
-			{ installPath: plugin, version: "0.30.0", installedAt: 1 },
+			{ installPath: plugin, version: "0.33.0", installedAt: 1 },
 		],
 	});
 	const malformedRecord = probeRememberRuntime({ installedPluginsPath: installed, env: {}, toolPaths: tools(root) });
@@ -165,23 +139,24 @@ test("malformed manifest and malformed installation records are safe read-only r
 	assert.ok(malformedRecord.issues.some(({ code }) => code === "installed-record-missing"));
 });
 
-test("required paths must be contained regular files with correct modes", () => {
+test("required scripts must be contained regular files but need no execute bit", () => {
 	const root = temp();
 	const plugin = join(root, "plugin");
 	runtime(plugin);
-	chmodSync(join(plugin, "scripts", "doctor.sh"), 0o600);
-	const directoryModule = join(plugin, "pipeline", "extract.py");
-	rmSync(directoryModule);
-	mkdirSync(directoryModule);
-	const outside = join(root, "outside.py");
-	file(outside, "# outside\n");
-	rmSync(join(plugin, "pipeline", "haiku.py"));
-	symlinkSync(outside, join(plugin, "pipeline", "haiku.py"));
+	chmodSync(join(plugin, "scripts", "post-tool-hook.sh"), 0o644);
+	assert.equal(probeRememberRuntime({ env: { PI_REMEMBER_PLUGIN_ROOT: plugin }, toolPaths: tools(root) }).disposition, "ready");
+
+	const directoryScript = join(plugin, "scripts", "save-session.sh");
+	rmSync(directoryScript);
+	mkdirSync(directoryScript);
+	const outside = join(root, "outside.sh");
+	file(outside, "#!/bin/bash\n");
+	rmSync(join(plugin, "scripts", "session-end-hook.sh"));
+	symlinkSync(outside, join(plugin, "scripts", "session-end-hook.sh"));
 
 	const report = probeRememberRuntime({ env: { PI_REMEMBER_PLUGIN_ROOT: plugin }, toolPaths: tools(root) });
 	assert.equal(report.disposition, "read-only");
-	assert.equal(report.issues.filter(({ code }) => code === "required-script-invalid").length, 1);
-	assert.equal(report.issues.filter(({ code }) => code === "required-module-invalid").length, 2);
+	assert.equal(report.issues.filter(({ code }) => code === "required-script-invalid").length, 2);
 
 	const toolDirectory = join(root, "tool-directory");
 	mkdirSync(toolDirectory);
@@ -193,12 +168,12 @@ test("required paths must be contained regular files with correct modes", () => 
 	assert.ok(badTool.issues.some(({ code, message }) => code === "required-tool-missing" && message.endsWith("jq")));
 });
 
-test("missing bundled config is a non-fatal explicit warning", () => {
+test("a missing skill only disables /skill:remember", () => {
 	const root = temp();
 	const plugin = join(root, "plugin");
-	runtime(plugin, "0.30.0", false);
+	runtime(plugin, "0.33.0", false);
 	const report = probeRememberRuntime({ env: { PI_REMEMBER_PLUGIN_ROOT: plugin }, toolPaths: tools(root) });
 	assert.equal(report.disposition, "ready");
-	assert.ok(report.issues.some(({ code }) => code === "static-probe-only"));
-	assert.ok(report.issues.some(({ code, level }) => code === "bundled-config-missing" && level === "warning"));
+	assert.equal(report.paths.skill, undefined);
+	assert.ok(report.issues.some(({ code, level }) => code === "skill-missing" && level === "warning"));
 });

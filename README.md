@@ -6,16 +6,12 @@ Give [Pi](https://github.com/earendil-works/pi) the same long-term memory as Cla
 
 The extension contains none of Remember's code. It finds the copy Claude Code installed and runs that.
 
-> [!WARNING]
-> **Pre-release: capture is currently off.** Memory hooks only run after a provider-free compatibility check (see [Qualification](#qualification)) passes every required scenario. Two scenarios are still marked `blocked`, so for now the extension runs **read-only**. Diagnostics and status work; automatic capture does not yet.
-
 ## Contents
 
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
 - [Install](#install)
 - [Commands](#commands)
-- [Qualification](#qualification)
 - [Configuration](#configuration)
 - [Provider and billing](#provider-and-billing)
 - [Privacy and security](#privacy-and-security)
@@ -60,12 +56,12 @@ Tool calls never wait on any of this: hooks run on a serialized background queue
 
 | Component | Version |
 |---|---|
-| Claude Code Remember plugin | exactly `0.30.0` (commit `54f4da9f10a90b77fb57318192bd5a936a6d4a01`) |
+| Claude Code Remember plugin | whichever version Claude Code has installed; verified end to end with `0.33.0` |
 | Pi (`@earendil-works/pi-coding-agent`) | lifecycle written against `0.85.1`; smoke-tested on `0.87.1` |
 | Tools on `PATH` | `bash`, `python3`, `jq` |
 | OS | Linux / POSIX. Windows is untested. |
 
-Install Remember in Claude Code first (`/plugin install remember@claude-plugins-official`). Any version other than the pinned one keeps this extension read-only.
+Install Remember in Claude Code first (`/plugin install remember@claude-plugins-official`). When Claude Code updates Remember, Pi picks up the new version on its next session, just as Claude Code does.
 
 ## Install
 
@@ -102,28 +98,18 @@ Then check it loaded:
 | `/remember-status` | Adapter state: supported vs installed Remember version, probe issues, session and projection state, queue, and last hook result. |
 | `/remember:doctor` | Runs Remember's own `doctor.sh` and shows its report unchanged: paths, tools, storage mode, capture health. Works in read-only mode, so it can explain why. |
 | `/remember-save` | Waits until the agent is idle, then forces an immediate save of this session. Reports the actual result. |
-| `/skill:remember` | Remember's handoff skill, loaded from the installed plugin. Writes a short "where I stopped / what's next" note. Only offered when the installed version passes the pin. |
+| `/skill:remember` | Remember's handoff skill, loaded from the installed plugin. Writes a short "where I stopped / what's next" note. |
 
 Command output goes to the UI notification area, or to stderr when there is no UI. It is never posted as a chat message, because Pi sends those to the model. Stdout stays clean in print and JSON modes.
-
-## Qualification
-
-Hooks stay disabled until the installed runtime passes a black-box compatibility check:
-
-```bash
-npm run test:parity -- --output-root ~/.pi/agent/remember
-```
-
-The harness runs the installed Remember runtime in isolated temporary home directories with a fake provider on `PATH`, so it **never makes model calls or touches your real memory store**. It writes `qualification-v1.json`. Hooks run only when that report matches the installed version and commit and every required scenario has `passed`.
 
 ## Configuration
 
 | Setting | Effect |
 |---|---|
-| `PI_REMEMBER_PLUGIN_ROOT` | Use this Remember install directory instead of the one recorded in `~/.claude/plugins/installed_plugins.json`. It must still pass every check. |
-| Remember's own config | `~/.remember/config.json` and `<project>/.remember/config.json` work exactly as they do in Claude Code. The adapter adds no config layer of its own. |
+| `PI_REMEMBER_PLUGIN_ROOT` | Use this Remember install directory instead of the most recently updated one recorded in `~/.claude/plugins/installed_plugins.json`. |
+| Remember's own config | `~/.remember/config.json`, `<project>/.remember/config.json` and `REMEMBER_*` environment variables work exactly as they do in Claude Code. The adapter adds no config layer of its own. |
 
-Adapter state (projections, recovery markers, qualification report) lives in `~/.pi/agent/remember`.
+Adapter state (projections and recovery markers) lives in `~/.pi/agent/remember`. The memory store itself is wherever Remember puts it: `<project>/.remember/` by default.
 
 ## Provider and billing
 
@@ -132,7 +118,7 @@ Remember chooses the summarizer, not this extension. For these transcripts it ca
 ## Privacy and security
 
 - **Session text on disk.** Projections contain session text. They are written as owner-only files (`0700` directories, `0600` files). Nothing at all is written in read-only mode.
-- **Minimal environment.** Remember scripts run with an allowlisted environment (`PATH`, `HOME`, `USER`, locale, `TZ`, and Remember's path variables). Other variables are not passed through, and secrets are redacted from captured output.
+- **Same environment as Claude Code.** Remember scripts get Pi's environment plus `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PROJECT_DIR`, as Claude Code hooks do, so summarizer auth and `REMEMBER_*` settings carry over. Secrets are redacted from captured hook output.
 - **Path checks.** The plugin root, projection and recovery paths are resolved to real paths and must stay inside their expected directories. Symlink escapes are rejected.
 - **Git backup stays off.** Remember's optional git backup sends memory off-machine. It stays under Remember's own config and is never enabled by this extension.
 - **Project trust.** A project-local install (`-l`) only loads after you trust the project in Pi.
@@ -141,15 +127,15 @@ Remember chooses the summarizer, not this extension. For these transcripts it ca
 
 | Symptom | Check |
 |---|---|
-| `/remember-status` shows `unsupported-version` | Your installed Remember isn't `0.30.0`. The extension stays read-only by design. |
+| `.remember/` exists but looks empty | Remember writes a `.gitignore` containing `*` there, so `fd`, `rg` and editors hide its files. Use `ls -a .remember`. |
+| Nothing saved yet | Remember saves mid-session only after 3 of your messages and more than 50 new transcript lines, at most every 120 seconds. Quitting Pi always forces a save, and so does `/remember-save`. |
 | `installed-record-unreadable` / `installed-record-missing` | Remember isn't installed in Claude Code, or `~/.claude/plugins/installed_plugins.json` is missing. |
 | `required-tool-missing` | Install `bash`, `python3` or `jq` and make sure they're on `PATH`. |
-| `behavior-unverified` / `behavior-incomplete` | Run [qualification](#qualification). |
+| `required-script-invalid` | The Remember install is incomplete. Reinstall it in Claude Code. |
 | Is Remember itself healthy? | Run `/remember:doctor`. Its verdict comes straight from Remember. |
 
 ## Limitations
 
-- **Read-only for now.** Capture stays off until qualification passes (see the warning at the top).
 - **Recent memory, not search.** Recall is compressed recent memory loaded at startup, not a search over past sessions on every prompt.
 - **Some details aren't in status.** Remember decides the store path and summarizer, so `/remember-status` doesn't show them; use `/remember:doctor`.
 - **No `/remember` command.** Pi runs skills as `/skill:remember`, and a separate command could shadow Remember's own skill.
@@ -158,12 +144,13 @@ Remember chooses the summarizer, not this extension. For these transcripts it ca
 ## Development
 
 ```bash
-npm run check        # syntax-check every module
-npm test             # unit, integration, and provider-free parity tests
-npm run test:parity  # print a qualification report for the installed runtime
+npm run check   # type-check every module
+npm test        # unit and integration tests
 ```
 
-The design, lifecycle mapping and release criteria are documented in [ARCHITECTURE.md](ARCHITECTURE.md).
+`tests/integration/installed-remember.test.ts` runs a Pi session through your installed Remember end to end (save, then recall in the next session) with only the summarizer faked. It is skipped when Remember isn't installed.
+
+The design and lifecycle mapping are documented in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## License
 

@@ -14,7 +14,7 @@ afterEach(() => {
 
 function report(overrides: Partial<CapabilityReport> = {}): CapabilityReport {
 	return {
-		disposition: "ready", root: "/fake/remember", version: "0.30.0", issues: [], paths: {}, tools: {},
+		disposition: "ready", root: "/fake/remember", version: "0.33.0", issues: [], paths: {}, tools: {},
 		...overrides,
 	};
 }
@@ -68,14 +68,13 @@ test("doctor failure is reported without inventing a verdict", async () => {
 
 test("status lists versions, issues, and coordinator state", () => {
 	const text = formatStatus(
-		report({ disposition: "read-only", version: "0.33.0", issues: [{ level: "error", code: "unsupported-version", message: "Remember 0.33.0 is unsupported; expected 0.30.0." }] }),
+		report({ disposition: "read-only", version: "0.33.0", issues: [{ level: "error", code: "required-tool-missing", message: "Required Remember tool is unavailable: jq" }] }),
 		status({ dirty: true, dirtyGeneration: 5, epoch: 2, hostSessionId: "a".repeat(64), lastHook: "post-tool", lastOutcome: "ok" }),
 		"/adapter",
 	);
-	assert.match(text, /Supported Remember: 0\.30\.0/);
 	assert.match(text, /Installed Remember: 0\.33\.0/);
 	assert.match(text, /Hook execution: read-only/);
-	assert.match(text, /error unsupported-version/);
+	assert.match(text, /error required-tool-missing/);
 	assert.match(text, /dirty yes \(generation 5, published 3\)/);
 	assert.match(text, /epoch 2/);
 	assert.match(text, /Adapter root: \/adapter/);

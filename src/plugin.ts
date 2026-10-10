@@ -9,24 +9,14 @@ import type {
 	ProbeOptions,
 	RememberManifest,
 } from "./types.ts";
-import { SUPPORTED_REMEMBER_VERSION } from "./types.ts";
 
-export const SUPPORTED_REMEMBER_COMMIT = "54f4da9f10a90b77fb57318192bd5a936a6d4a01";
-
+/** The scripts the adapter launches. Like Claude Code's hooks.json, each runs as `bash <script>`. */
 const REQUIRED_SCRIPTS = [
 	"scripts/session-start-hook.sh",
 	"scripts/user-prompt-hook.sh",
 	"scripts/post-tool-hook.sh",
 	"scripts/session-end-hook.sh",
 	"scripts/save-session.sh",
-	"scripts/doctor.sh",
-	"scripts/run-consolidation.sh",
-] as const;
-const REQUIRED_MODULES = [
-	"pipeline/__init__.py",
-	"pipeline/extract.py",
-	"pipeline/haiku.py",
-	"pipeline/consolidate.py",
 ] as const;
 const REQUIRED_TOOLS = ["bash", "python3", "jq"] as const;
 
@@ -80,19 +70,15 @@ function recordsFrom(value: unknown): Candidate[] {
 	return records;
 }
 
-function rank({ record }: Candidate, supportedVersion: string, supportedCommit?: string): number {
-	return (record.version === supportedVersion ? 2 : 0) + (supportedCommit !== undefined && record.gitCommitSha === supportedCommit ? 1 : 0);
-}
-
-function compareCandidates(a: Candidate, b: Candidate, supportedVersion: string, supportedCommit?: string): number {
-	return rank(b, supportedVersion, supportedCommit) - rank(a, supportedVersion, supportedCommit)
-		|| (b.record.installedAt ?? "").localeCompare(a.record.installedAt ?? "")
+/** The most recently updated install wins, the one Claude Code itself would be running. */
+function compareCandidates(a: Candidate, b: Candidate): number {
+	return (b.record.lastUpdated ?? b.record.installedAt ?? "").localeCompare(a.record.lastUpdated ?? a.record.installedAt ?? "")
 		|| a.key.localeCompare(b.key)
 		|| (a.record.installPath ?? "").localeCompare(b.record.installPath ?? "");
 }
 
-function chooseRecord(records: Candidate[], supportedVersion: string, supportedCommit?: string): Candidate {
-	return [...records].sort((a, b) => compareCandidates(a, b, supportedVersion, supportedCommit))[0];
+function chooseRecord(records: Candidate[]): Candidate {
+	return [...records].sort(compareCandidates)[0];
 }
 
 function regularFile(path: string, mode: number): string | undefined {
@@ -106,8 +92,8 @@ function regularFile(path: string, mode: number): string | undefined {
 	}
 }
 
-function runtimeFile(root: string, relativePath: string, executable: boolean): string | undefined {
-	const path = regularFile(join(root, relativePath), constants.R_OK | (executable ? constants.X_OK : 0));
+function runtimeFile(root: string, relativePath: string): string | undefined {
+	const path = regularFile(join(root, relativePath), constants.R_OK);
 	return path && isContained(root, path) ? path : undefined;
 }
 
@@ -126,8 +112,6 @@ function findTool(name: string, env: Readonly<Record<string, string | undefined>
 
 export function probeRememberRuntime(options: ProbeOptions = {}): CapabilityReport {
 	const env = options.env ?? process.env;
-	const supportedVersion = options.supportedVersion ?? SUPPORTED_REMEMBER_VERSION;
-	const supportedCommit = options.supportedCommit === undefined ? SUPPORTED_REMEMBER_COMMIT : options.supportedCommit;
 	const issues: CapabilityIssue[] = [];
 	const report: CapabilityReport = {
 		disposition: "read-only",
@@ -157,7 +141,7 @@ export function probeRememberRuntime(options: ProbeOptions = {}): CapabilityRepo
 			issues.push(issue("error", "installed-record-missing", "No valid installed Remember record was found."));
 			return report;
 		}
-		const selected = chooseRecord(records, supportedVersion, supportedCommit);
+		const selected = chooseRecord(records);
 		record = selected.record;
 		requestedRoot = record.installPath;
 		report.source = "installed-record";
@@ -175,7 +159,7 @@ export function probeRememberRuntime(options: ProbeOptions = {}): CapabilityRepo
 		return report;
 	}
 
-	const manifestPath = runtimeFile(report.root, ".claude-plugin/plugin.json", false);
+	const manifestPath = runtimeFile(report.root, ".claude-plugin/plugin.json");
 	report.paths.manifest = manifestPath ?? join(report.root, ".claude-plugin", "plugin.json");
 	let manifest: RememberManifest;
 	try {
@@ -194,35 +178,15 @@ export function probeRememberRuntime(options: ProbeOptions = {}): CapabilityRepo
 	}
 	report.version = typeof manifest.version === "string" ? manifest.version : record?.version;
 	report.gitCommitSha = record?.gitCommitSha;
-	if (report.version !== supportedVersion) {
-		issues.push(issue("error", "unsupported-version", `Remember ${report.version ?? "unknown"} is unsupported; expected ${supportedVersion}.`));
-	}
-	if (record?.version && manifest.version && record.version !== manifest.version) {
-		issues.push(issue("error", "version-mismatch", "The installation record and plugin manifest versions disagree."));
-	}
-	if (supportedCommit && record?.gitCommitSha && record.gitCommitSha !== supportedCommit) {
-		issues.push(issue("error", "unsupported-commit", "The installed Remember commit is not the qualified compatibility baseline."));
-	} else if (supportedCommit && !record?.gitCommitSha) {
-		issues.push(issue("warning", "commit-unverified", "The Remember commit could not be verified; compatibility is based on its manifest version."));
-	}
 
 	for (const relativePath of REQUIRED_SCRIPTS) {
-		if (!runtimeFile(report.root, relativePath, true)) {
-			issues.push(issue("error", "required-script-invalid", `Required Remember script is missing, non-executable, not a regular file, or escapes its root: ${relativePath}`));
+		if (!runtimeFile(report.root, relativePath)) {
+			issues.push(issue("error", "required-script-invalid", `Required Remember script is missing, unreadable, not a regular file, or escapes its root: ${relativePath}`));
 		}
 	}
-	for (const relativePath of REQUIRED_MODULES) {
-		if (!runtimeFile(report.root, relativePath, false)) {
-			issues.push(issue("error", "required-module-invalid", `Required Remember module is missing, unreadable, not a regular file, or escapes its root: ${relativePath}`));
-		}
-	}
-	const skill = runtimeFile(report.root, "skills/remember/SKILL.md", false);
+	const skill = runtimeFile(report.root, "skills/remember/SKILL.md");
 	if (skill) report.paths.skill = skill;
-	else issues.push(issue("error", "skill-invalid", "The installed Remember skill is missing, unreadable, not a regular file, or escapes its root."));
-
-	if (!runtimeFile(report.root, "config.json", false)) {
-		issues.push(issue("warning", "bundled-config-missing", "The installed runtime has no usable config.json; Remember's built-in fallback defaults will apply."));
-	}
+	else issues.push(issue("warning", "skill-missing", "The installed Remember skill was not found, so /skill:remember is unavailable."));
 
 	for (const tool of REQUIRED_TOOLS) {
 		const supplied = options.toolPaths?.[tool];
@@ -230,7 +194,6 @@ export function probeRememberRuntime(options: ProbeOptions = {}): CapabilityRepo
 		report.tools[tool] = path;
 		if (!path) issues.push(issue("error", "required-tool-missing", `Required Remember tool is unavailable: ${tool}`));
 	}
-	issues.push(issue("warning", "static-probe-only", "Static capabilities passed; provider routing, Python imports, lock behavior, and hook execution remain unverified until the parity harness runs."));
 	return finish(report);
 }
 

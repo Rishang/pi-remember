@@ -15,7 +15,8 @@ import { ContextChannel, deliveredContextRevisions, type ContextMessage, type No
 import { projectBranch, type PiBranchEntry, type ProjectionResult } from "./projection.ts";
 import type { CapabilityReport, HookOutput } from "./types.ts";
 
-const DEFAULT_SHUTDOWN_MS = 2_000;
+// Claude Code gives Remember's SessionEnd hook 10s (hooks.json).
+const DEFAULT_SHUTDOWN_MS = 10_000;
 const MARKER_SCHEMA = 1;
 
 export type SessionStartReason = "startup" | "reload" | "new" | "resume" | "fork";

@@ -2,7 +2,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { probeRememberRuntime } from "../src/plugin.ts";
-import { readQualificationReport } from "../src/qualification.ts";
 import { describeSave, discoverSkillPaths, formatStatus, runDoctor, runtimeEnvironment } from "../src/commands.ts";
 import { parseHookOutput, runBounded } from "../src/runner.ts";
 import { SessionCoordinator, type CoordinatorOptions, type HookInput, type HostSnapshot, type RememberRuntime } from "../src/runtime.ts";
@@ -43,33 +42,12 @@ const HOOKS: Record<HookInput["kind"], [script: string, event: string]> = {
 	"session-end": ["session-end-hook.sh", "SessionEnd"],
 };
 
-/** Installed process adapter. Activation requires an exact cached provider-free qualification report. */
+/** Runs the installed Remember hook scripts the way Claude Code's hooks.json does. */
 export class InstalledRememberRuntime implements RememberRuntime {
 	#report?: CapabilityReport;
-	readonly #adapterRoot: string;
-
-	constructor(adapterRoot = join(homedir(), ".pi", "agent", "remember")) {
-		this.#adapterRoot = adapterRoot;
-	}
 
 	probe(): CapabilityReport {
-		if (this.#report) return this.#report;
-		const report = probeRememberRuntime();
-		const qualification = report.disposition === "ready" ? readQualificationReport(this.#adapterRoot, report) : undefined;
-		this.#report = report.disposition === "ready" && !qualification?.activationReady
-			? {
-				...report,
-				disposition: "read-only",
-				issues: [...report.issues, {
-					level: "error",
-					code: qualification ? "behavior-incomplete" : "behavior-unverified",
-					message: qualification
-						? "Installed hook execution is disabled because required provider-free parity scenarios remain blocked or failed."
-						: "Installed hook execution is disabled until a matching behavioral qualification report exists.",
-				}],
-			}
-			: report;
-		return this.#report;
+		return this.#report ??= probeRememberRuntime();
 	}
 
 	async invoke(input: HookInput): Promise<HookOutput> {
@@ -105,7 +83,8 @@ export class InstalledRememberRuntime implements RememberRuntime {
 			env: runtimeEnvironment(report.root, input.cwd, input.projectionPath),
 			stdin: payload,
 			signal: input.signal,
-			timeoutMs: input.kind === "session-end" ? 2_000 : 15_000,
+			// Claude Code's budgets: 10s for SessionEnd (hooks.json), its 60s default for the rest.
+			timeoutMs: input.kind === "session-end" ? 10_000 : 60_000,
 			sensitiveValues: [payload],
 		});
 		if (!result.ok) throw { failure: result.failure };
@@ -119,7 +98,7 @@ export function registerRememberExtension(pi: PiSurface, dependencies: Registrat
 	let latestContext: ContextLike | undefined;
 	let replacementReady: Promise<void> = Promise.resolve();
 	const create = dependencies.createCoordinator ?? ((options) => new SessionCoordinator(options));
-	const runtime = dependencies.createRuntime ?? (() => new InstalledRememberRuntime(root));
+	const runtime = dependencies.createRuntime ?? (() => new InstalledRememberRuntime());
 	const root = dependencies.adapterRoot ?? join(homedir(), ".pi", "agent", "remember");
 	const probe = dependencies.probe ?? (() => probeRememberRuntime());
 	let activeRuntime: RememberRuntime | undefined;

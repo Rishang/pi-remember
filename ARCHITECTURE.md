@@ -1,8 +1,10 @@
 # Pi Remember Architecture Plan
 
-Status: proposed architecture  
-Compatibility baseline: Claude Remember `0.30.0`, commit `54f4da9f10a90b77fb57318192bd5a936a6d4a01`  
+Status: implemented; see the revision note below  
+Compatibility: whichever Claude Remember version Claude Code has installed (verified end to end with `0.33.0`)  
 Pi baseline: `@earendil-works/pi-coding-agent` `0.85.1`
+
+> **Revision (2026-10-10): the version pin and qualification gate are removed.** The plan below pinned Remember `0.30.0` and kept hooks off until a provider-free parity report passed. In practice that left Pi permanently read-only: Claude Code auto-updates Remember, and five required parity scenarios could never pass. The adapter now does what Claude Code does: it runs whichever Remember is installed (the most recently updated record), launches each script as `bash <script>`, and passes its environment through with `CLAUDE_PLUGIN_ROOT`/`CLAUDE_PROJECT_DIR`. Remember 0.33.0 reads `transcript_path` from hook stdin on every event (upstream #459), which is the contract the projection relies on. The probe now checks only what the adapter needs to run (manifest, the five hook/save scripts, `bash`/`python3`/`jq`). `tests/integration/installed-remember.test.ts` replaces the parity harness: it saves and recalls through the installed runtime with only the summarizer faked. Sections below that mention pinning, qualification or the parity harness describe the original plan.
 
 ## Executive decision
 
@@ -247,9 +249,11 @@ Adapter-private JSON and projection manifests use unique sibling temp files plus
 
 ### Runtime discovery
 
-Resolve from `~/.claude/plugins/installed_plugins.json`, selecting the exact `remember@...` record and supported version. Do not sort cache directory names and pick the newest-looking entry.
+Resolve from `~/.claude/plugins/installed_plugins.json`, selecting the most recently updated `remember@...` record (the one Claude Code runs). Do not sort cache directory names and pick the newest-looking entry.
 
 `PI_REMEMBER_PLUGIN_ROOT` may override discovery, but must pass the same capability probe.
+
+*Revised:* the probe below was cut to manifest, the five scripts the adapter launches, and `bash`/`python3`/`jq`. Unknown versions are accepted.
 
 Probe before activation:
 

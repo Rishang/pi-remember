@@ -48,7 +48,7 @@ function report(disposition: "ready" | "read-only" = "ready"): CapabilityReport 
 	return {
 		disposition,
 		root: "/fake/remember",
-		version: "0.30.0",
+		version: "0.33.0",
 		issues: [],
 		paths: {},
 		tools: {},

@@ -1,5 +1,3 @@
-export const SUPPORTED_REMEMBER_VERSION = "0.30.0";
-
 export type RuntimeDisposition = "ready" | "read-only";
 export type CapabilityLevel = "error" | "warning";
 
@@ -43,8 +41,6 @@ export interface ProbeOptions {
 	env?: Readonly<Record<string, string | undefined>>;
 	installedPluginsPath?: string;
 	homeDir?: string;
-	supportedVersion?: string;
-	supportedCommit?: string;
 	toolPaths?: Readonly<Record<string, string | undefined>>;
 }
 
