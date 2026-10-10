@@ -700,3 +700,25 @@ test("skill discovery stays silent when the static probe rejects the runtime", a
 	});
 	assert.equal(await handlers.get("resources_discover")!({ cwd: "/tmp", reason: "startup" }, {}), undefined);
 });
+
+test("only a hook's systemMessage reaches the UI; successful-hook stderr stays hidden, as in Claude Code", async () => {
+	type Handler = (event: any, context: any) => unknown;
+	const handlers = new Map<string, Handler>();
+	const notices: [string, string][] = [];
+	registerRememberExtension({ on: (event: string, handler: Handler) => { handlers.set(event, handler); }, registerCommand() {} } as any, {
+		adapterRoot: temp(),
+		createRuntime: () => new FakeRuntime("ready", async ({ kind }) => kind === "session-start"
+			? parseHookOutput(JSON.stringify({ systemMessage: "visible notice" }), "stderr noise")
+			: parseHookOutput("", "post-tool-ran: No such file or directory")),
+	});
+	const context = {
+		cwd: temp(), hasUI: true, ui: { notify: (text: string, level: string) => { notices.push([text, level]); } },
+		sessionManager: { getSessionId: () => "s", getBranch: () => [user("u", null)] },
+	};
+	await handlers.get("session_start")!({ reason: "startup" }, context);
+	await handlers.get("tool_result")!({}, context);
+	await handlers.get("turn_end")!({}, context);
+	await new Promise((resolve) => setTimeout(resolve, 20)); // turn_end queues the post-tool hook without awaiting it
+	await handlers.get("session_shutdown")!({ reason: "quit" }, context);
+	assert.deepEqual(notices, [["visible notice", "info"]]);
+});

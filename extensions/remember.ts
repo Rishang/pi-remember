@@ -120,10 +120,9 @@ export function registerRememberExtension(pi: PiSurface, dependencies: Registrat
 				adapterRoot: root,
 				runtime: activeRuntime,
 				snapshot: currentSnapshot,
-				notice: (notice) => {
-					if (!latestContext?.hasUI) return;
-					const text = notice.systemMessage || notice.diagnostics;
-					if (text) latestContext.ui.notify(text, notice.diagnostics ? "warning" : "info");
+				// Like Claude Code: a hook's systemMessage reaches the user; stderr from a successful hook does not.
+				notice: ({ systemMessage }) => {
+					if (systemMessage && latestContext?.hasUI) latestContext.ui.notify(systemMessage, "info");
 				},
 			});
 		}
